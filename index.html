@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Screen Wake Lock 動作確認</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      max-width: 640px;
+      margin: 32px auto;
+      padding: 0 20px;
+      background: #151515;
+      color: #eee;
+    }
+    button {
+      padding: 12px 18px;
+      margin: 6px 6px 6px 0;
+      font-size: 16px;
+    }
+    #status {
+      padding: 16px;
+      background: #282828;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+  </style>
+</head>
+<body>
+  <h1>Screen Wake Lock 動作確認</h1>
+  <p>画面の自動消灯を防ぎます。端末の輝度は変更しません。</p>
+  <p id="support"></p>
+  <button id="start">自動消灯を防ぐ</button>
+  <button id="stop" disabled>解除する</button>
+  <p id="status" role="status" aria-live="polite">未開始</p>
+
+  <script>
+    const startButton = document.querySelector("#start");
+    const stopButton = document.querySelector("#stop");
+    const status = document.querySelector("#status");
+    const supported = "wakeLock" in navigator;
+
+    let enabled = false;
+    let sentinel = null;
+    let requesting = false;
+
+    function show(message) {
+      status.textContent = message;
+    }
+
+    function updateButtons() {
+      startButton.disabled = !supported || enabled;
+      stopButton.disabled = !enabled;
+    }
+
+    async function acquire() {
+      if (!enabled || requesting || sentinel ||
+          document.visibilityState !== "visible") {
+        return;
+      }
+
+      requesting = true;
+      show("Wake Lockを取得しています…");
+
+      try {
+        const lock = await navigator.wakeLock.request("screen");
+
+        // 取得中に停止された、またはページが非表示になった場合。
+        if (!enabled || document.visibilityState !== "visible") {
+          await lock.release();
+          return;
+        }
+
+        sentinel = lock;
+
+        lock.addEventListener("release", () => {
+          if (sentinel !== lock) return;
+          sentinel = null;
+          show(enabled
+            ? "Wake Lockが解除されました。ページ復帰または再操作で再取得します。"
+            : "Wake Lockを停止しました。");
+        });
+
+        show("Wake Lock取得済み：自動消灯を防いでいます。");
+      } catch (error) {
+        show(`取得できませんでした：${error.name}\n${error.message}`);
+      } finally {
+        requesting = false;
+      }
+    }
+
+    startButton.addEventListener("click", () => {
+      enabled = true;
+      updateButtons();
+      acquire();
+    });
+
+    stopButton.addEventListener("click", async () => {
+      enabled = false;
+      updateButtons();
+
+      const lock = sentinel;
+      sentinel = null;
+
+      try {
+        if (lock) await lock.release();
+        show("停止しました。OSの通常の画面管理に戻ります。");
+      } catch (error) {
+        show(`解除時のエラー：${error.name}\n${error.message}`);
+      }
+    });
+
+    document.addEventListener("visibilitychange", () => {
+      if (enabled && document.visibilityState === "visible") {
+        acquire();
+      }
+    });
+
+    document.querySelector("#support").textContent =
+      `API検出：${supported ? "対応" : "非対応"} ／ ` +
+      `セキュアコンテキスト：${window.isSecureContext ? "はい" : "いいえ"}`;
+
+    updateButtons();
+  </script>
+</body>
+</html>
