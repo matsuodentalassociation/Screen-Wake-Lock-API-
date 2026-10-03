@@ -2,125 +2,339 @@
 <html lang="ja">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Screen Wake Lock 動作確認</title>
+  <meta name="viewport"
+        content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#000000">
+  <meta name="color-scheme" content="dark">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style"
+        content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="黒画面検証">
+  <title>全面黒画面・モバイル検証</title>
   <style>
+    :root {
+      color-scheme: dark;
+      background: #000;
+      color: #ddd;
+      font-family: system-ui, -apple-system, sans-serif;
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      width: 100%;
+      min-height: 100%;
+      background: #000;
+    }
     body {
-      font-family: system-ui, sans-serif;
+      min-height: 100vh;
+      min-height: 100dvh;
+    }
+    [hidden] { display: none !important; }
+    main {
       max-width: 640px;
-      margin: 32px auto;
-      padding: 0 20px;
-      background: #151515;
-      color: #eee;
+      margin-inline: auto;
+      padding: 24px;
+      padding-top: max(24px, env(safe-area-inset-top, 0px));
+      padding-right: max(24px, env(safe-area-inset-right, 0px));
+      padding-bottom: max(24px, env(safe-area-inset-bottom, 0px));
+      padding-left: max(24px, env(safe-area-inset-left, 0px));
     }
+    h1 { font-size: 1.5rem; }
+    p, li { line-height: 1.7; }
     button {
-      padding: 12px 18px;
+      padding: 14px 18px;
       margin: 6px 6px 6px 0;
-      font-size: 16px;
+      border: 1px solid #666;
+      border-radius: 10px;
+      background: #222;
+      color: #eee;
+      font: inherit;
     }
-    #status {
-      padding: 16px;
-      background: #282828;
+    button:disabled { opacity: .45; }
+    button:focus-visible { outline: 2px solid #aaa; }
+    label { display: block; margin: 16px 0; }
+    pre {
+      padding: 14px;
+      border: 1px solid #333;
+      border-radius: 8px;
       white-space: pre-wrap;
       overflow-wrap: anywhere;
+      font-size: .85rem;
     }
+    #blackScreen {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 2147483647;
+      display: grid;
+      place-items: center;
+      background: #000;
+      color: #555;
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-touch-callout: none;
+      overscroll-behavior: none;
+      padding:
+        env(safe-area-inset-top, 0px)
+        env(safe-area-inset-right, 0px)
+        env(safe-area-inset-bottom, 0px)
+        env(safe-area-inset-left, 0px);
+    }
+    #clock {
+      font-size: clamp(2rem, 12vw, 4rem);
+      font-variant-numeric: tabular-nums;
+      font-weight: 400;
+    }
+    html:fullscreen, html:-webkit-full-screen {
+      background: #000;
+    }
+    ::backdrop { background: #000; }
+    body.dark-active { overflow: hidden; }
   </style>
 </head>
 <body>
-  <h1>Screen Wake Lock 動作確認</h1>
-  <p>画面の自動消灯を防ぎます。端末の輝度は変更しません。</p>
-  <p id="support"></p>
-  <button id="start">自動消灯を防ぐ</button>
-  <button id="stop" disabled>解除する</button>
-  <p id="status" role="status" aria-live="polite">未開始</p>
+  <main id="controls">
+    <h1>全面黒画面・モバイル検証</h1>
+    <p>
+      ページの背景を純黒にし、対応環境では全画面表示を要求します。
+      端末の輝度・バックライトは変更しません。
+    </p>
+    <ul>
+      <li>短いタッチ：現在時刻を5秒間表示。</li>
+      <li>長押し：0.8秒で操作画面へ復帰。</li>
+      <li>キーボード利用時：Escapeで復帰。</li>
+    </ul>
+    <label>
+      <input id="keepAwake" type="checkbox" checked>
+      暗画面中はWake Lockで自動消灯を防ぐ
+    </label>
+    <button id="start">全画面を要求して黒画面へ</button>
+    <button id="plain">全画面要求なしで黒画面へ</button>
+    <h2>動作情報</h2>
+    <pre id="diagnostics"></pre>
+    <pre id="status" role="status" aria-live="polite">開始前</pre>
+    <p>
+      iPhoneでは共有メニューなどから「ホーム画面に追加」し、
+      追加したアイコンからの起動も比較してください。
+      通常のブラウザタブではバーが残る場合があります。
+    </p>
+    <p>
+      このページは表示検証専用です。録音・体動記録は行いません。
+      OSのステータス表示やホームインジケーターの完全非表示は保証しません。
+    </p>
+  </main>
+
+  <div id="blackScreen" hidden aria-label="黒画面。長押しで戻ります。">
+    <time id="clock" hidden></time>
+  </div>
 
   <script>
-    const startButton = document.querySelector("#start");
-    const stopButton = document.querySelector("#stop");
-    const status = document.querySelector("#status");
-    const supported = "wakeLock" in navigator;
+    const root = document.documentElement;
+    const controls = document.getElementById("controls");
+    const screen = document.getElementById("blackScreen");
+    const clock = document.getElementById("clock");
+    const status = document.getElementById("status");
+    const keepAwake = document.getElementById("keepAwake");
+    const start = document.getElementById("start");
 
-    let enabled = false;
-    let sentinel = null;
-    let requesting = false;
+    let active = false;
+    let wakeLock = null;
+    let requestingWake = false;
+    let generation = 0;
+    let pressTimer = null;
+    let clockTimer = null;
+    let pointerId = null;
+    let origin = null;
+    let longPressed = false;
 
-    function show(message) {
+    const fullscreenElement = () =>
+      document.fullscreenElement || document.webkitFullscreenElement;
+
+    function report(message) {
       status.textContent = message;
     }
 
-    function updateButtons() {
-      startButton.disabled = !supported || enabled;
-      stopButton.disabled = !enabled;
+    function diagnostics() {
+      const standalone =
+        matchMedia("(display-mode: standalone)").matches ||
+        navigator.standalone === true;
+      const fullscreenMode = matchMedia("(display-mode: fullscreen)").matches;
+      document.getElementById("diagnostics").textContent = [
+        `HTTPS等の安全な環境：${window.isSecureContext ? "はい" : "いいえ"}`,
+        `独立起動：${standalone ? "はい" : "いいえ"}`,
+        `fullscreen表示モード：${fullscreenMode ? "はい" : "いいえ"}`,
+        `Fullscreen API：${root.requestFullscreen || root.webkitRequestFullscreen ? "あり" : "なし"}`,
+        `Fullscreen許可：${document.fullscreenEnabled ?? document.webkitFullscreenEnabled ?? "不明"}`,
+        `全画面要素：${fullscreenElement() ? "あり" : "なし"}`,
+        `Wake Lock API：${"wakeLock" in navigator ? "あり" : "なし"}`
+      ].join("\n");
     }
 
-    async function acquire() {
-      if (!enabled || requesting || sentinel ||
-          document.visibilityState !== "visible") {
+    async function acquireWake() {
+      if (!active || !keepAwake.checked || requestingWake || wakeLock ||
+          document.visibilityState !== "visible") return;
+      if (!("wakeLock" in navigator)) {
+        report("黒画面開始。Wake Lock APIはありません。");
         return;
       }
-
-      requesting = true;
-      show("Wake Lockを取得しています…");
-
+      const token = generation;
+      requestingWake = true;
       try {
         const lock = await navigator.wakeLock.request("screen");
-
-        // 取得中に停止された、またはページが非表示になった場合。
-        if (!enabled || document.visibilityState !== "visible") {
+        if (!active || token !== generation ||
+            document.visibilityState !== "visible") {
           await lock.release();
           return;
         }
-
-        sentinel = lock;
-
+        wakeLock = lock;
         lock.addEventListener("release", () => {
-          if (sentinel !== lock) return;
-          sentinel = null;
-          show(enabled
-            ? "Wake Lockが解除されました。ページ復帰または再操作で再取得します。"
-            : "Wake Lockを停止しました。");
+          if (wakeLock === lock) {
+            wakeLock = null;
+            if (active) report("Wake Lockが解除されました。");
+          }
         });
-
-        show("Wake Lock取得済み：自動消灯を防いでいます。");
+        report("黒画面開始。Wake Lock取得済み。");
       } catch (error) {
-        show(`取得できませんでした：${error.name}\n${error.message}`);
+        report(`黒画面開始。Wake Lock取得失敗：${error.name}`);
       } finally {
-        requesting = false;
+        requestingWake = false;
       }
     }
 
-    startButton.addEventListener("click", () => {
-      enabled = true;
-      updateButtons();
-      acquire();
-    });
+    async function enterBlack(requestFullscreen) {
+      if (active) return;
+      active = true;
+      generation++;
+      report("黒画面開始。");
+      let fullscreenRequest = null;
 
-    stopButton.addEventListener("click", async () => {
-      enabled = false;
-      updateButtons();
+      // ユーザー操作が有効なうちに、awaitより前に呼び出す。
+      if (requestFullscreen && !fullscreenElement()) {
+        try {
+          if (root.requestFullscreen) {
+            fullscreenRequest = root.requestFullscreen({
+              navigationUI: "hide"
+            });
+          } else if (root.webkitRequestFullscreen) {
+            fullscreenRequest = root.webkitRequestFullscreen();
+          } else {
+            report("Fullscreen APIなし。ページ領域のみ黒表示します。");
+          }
+        } catch (error) {
+          report(`全画面要求失敗：${error.name}`);
+        }
+      }
 
-      const lock = sentinel;
-      sentinel = null;
+      controls.hidden = true;
+      screen.hidden = false;
+      clock.hidden = true;
+      document.body.classList.add("dark-active");
+      acquireWake();
 
+      if (fullscreenRequest) {
+        try {
+          await fullscreenRequest;
+        } catch (error) {
+          report(`全画面要求失敗：${error.name}。ページ領域は黒表示します。`);
+        }
+      }
+      diagnostics();
+    }
+
+    async function leaveBlack() {
+      if (!active) return;
+      active = false;
+      generation++;
+      clearTimeout(pressTimer);
+      clearTimeout(clockTimer);
+      screen.hidden = true;
+      controls.hidden = false;
+      document.body.classList.remove("dark-active");
+
+      const lock = wakeLock;
+      wakeLock = null;
+      const tasks = [];
+      if (lock) tasks.push(lock.release());
       try {
-        if (lock) await lock.release();
-        show("停止しました。OSの通常の画面管理に戻ります。");
-      } catch (error) {
-        show(`解除時のエラー：${error.name}\n${error.message}`);
+        if (fullscreenElement()) {
+          if (document.exitFullscreen) tasks.push(document.exitFullscreen());
+          else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+        }
+        await Promise.allSettled(tasks);
+      } finally {
+        report("操作画面に復帰しました。Wake Lockを解除しました。");
+        diagnostics();
+        start.focus({ preventScroll: true });
+      }
+    }
+
+    function updateClock() {
+      const now = new Date();
+      clock.dateTime = now.toISOString();
+      clock.textContent = now.toLocaleTimeString("ja-JP", {
+        hour: "2-digit", minute: "2-digit", hour12: false
+      });
+    }
+
+    screen.addEventListener("pointerdown", event => {
+      if (pointerId !== null || (event.pointerType === "mouse" && event.button !== 0)) return;
+      pointerId = event.pointerId;
+      origin = { x: event.clientX, y: event.clientY };
+      longPressed = false;
+      screen.setPointerCapture(event.pointerId);
+      pressTimer = setTimeout(() => {
+        longPressed = true;
+        leaveBlack();
+      }, 800);
+    });
+
+    screen.addEventListener("pointermove", event => {
+      if (event.pointerId !== pointerId || !origin) return;
+      if (Math.hypot(event.clientX - origin.x, event.clientY - origin.y) > 20) {
+        clearTimeout(pressTimer);
+        origin = null;
       }
     });
 
+    screen.addEventListener("pointerup", event => {
+      if (event.pointerId !== pointerId) return;
+      clearTimeout(pressTimer);
+      if (active && !longPressed && origin) {
+        updateClock();
+        clock.hidden = false;
+        clearTimeout(clockTimer);
+        clockTimer = setTimeout(() => { clock.hidden = true; }, 5000);
+      }
+      pointerId = null;
+      origin = null;
+    });
+
+    screen.addEventListener("pointercancel", () => {
+      clearTimeout(pressTimer);
+      pointerId = null;
+      origin = null;
+    });
+    screen.addEventListener("contextmenu", event => event.preventDefault());
+    document.addEventListener("keydown", event => {
+      if (event.key === "Escape" && active) leaveBlack();
+    });
     document.addEventListener("visibilitychange", () => {
-      if (enabled && document.visibilityState === "visible") {
-        acquire();
+      if (document.visibilityState === "visible") {
+        diagnostics();
+        acquireWake();
       }
     });
-
-    document.querySelector("#support").textContent =
-      `API検出：${supported ? "対応" : "非対応"} ／ ` +
-      `セキュアコンテキスト：${window.isSecureContext ? "はい" : "いいえ"}`;
-
-    updateButtons();
+    document.addEventListener("fullscreenchange", diagnostics);
+    document.addEventListener("webkitfullscreenchange", diagnostics);
+    document.getElementById("start").addEventListener("click", () => enterBlack(true));
+    document.getElementById("plain").addEventListener("click", () => enterBlack(false));
+    setInterval(() => {
+      if (active && !clock.hidden) updateClock();
+    }, 1000);
+    diagnostics();
   </script>
 </body>
 </html>
